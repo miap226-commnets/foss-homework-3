@@ -1,0 +1,69 @@
+name: FOSS Homework Automation
+
+on: [push, workflow_dispatch]
+
+jobs:
+  generate-files:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 1. 下载作业指定的 Zlib 源码
+      - name: Download zlib Source Code
+        run: |
+          wget https://www.zlib.net/zlib-1.3.1.tar.gz
+          tar -xzvf zlib-1.3.1.tar.gz
+          mv zlib-1.3.1 source_code
+
+      # 2. 生成 SBOM (SPDX 2.3 格式) - 对应作业要求
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./source_code
+          format: spdx-json
+          output-file: zlib_sbom.spdx.json
+
+      # 3. 统计版权数量 - 对应 Google Form 问题
+      - name: Count Copyright Occurrences
+        id: count_copyrights
+        run: |
+          echo "开始统计 Copyright 数量..."
+          # 使用 grep 递归查找 "Copyright"，不区分大小写
+          COUNT=$(grep -r -i "Copyright" ./source_code | wc -l)
+          echo "============================================"
+          echo "COPYRIGHT_COUNT: $COUNT"
+          echo "============================================"
+          # 这一步是为了让你在总结页面能直接看到结果
+          echo "### 📊 统计结果 (填入 Google Form)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Copyright Occurrences**: $COUNT" >> $GITHUB_STEP_SUMMARY
+
+      # 4. 生成 Legal Notices 文件 - 对应 Moodle 作业要求
+      - name: Generate Legal Notices File
+        run: |
+          echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
+          echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
+          echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
+          echo "Tool used: GitHub Actions (Syft + grep)" >> LEGAL_NOTICES.txt
+          echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
+          echo "" >> LEGAL_NOTICES.txt
+          
+          echo "LICENSE TEXT & COPYRIGHTS:" >> LEGAL_NOTICES.txt
+          # 提取源码中的 Copyright 信息
+          grep -r -i "Copyright" ./source_code >> LEGAL_NOTICES.txt
+          echo "" >> LEGAL_NOTICES.txt
+          echo "--- Full License Context from README ---" >> LEGAL_NOTICES.txt
+          # Zlib 的许可证通常在 README 中
+          cat ./source_code/README >> LEGAL_NOTICES.txt
+
+      # 5. 打包文件供下载
+      - name: Upload Homework Files
+        uses: actions/upload-artifact@v4
+        with:
+          name: homework-submission-files
+          path: |
+            zlib_sbom.spdx.json
+            LEGAL_NOTICES.txt
