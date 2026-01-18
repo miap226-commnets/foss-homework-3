@@ -25,25 +25,33 @@ jobs:
           format: spdx-json
           output-file: zlib_sbom.spdx.json
 
-      # Step 3: 统计数量 (清洗版)
+      # Step 3: 统计数量 (含 Corp. -> Corporation 修正)
       - name: Count Distinct Copyright Notices
         id: count_copyrights
         run: |
-          echo "开始进行强力清洗和去重统计..."
+          echo "开始进行深度代码清洗..."
           
-          # 1. grep: 强制要求年份后必须有字母 (过滤掉 'Copyright (c) 1997' 这种无效声明)
-          # 2. sed 链: 统一格式，去掉 (c), all rights reserved, 标点符号等
+          # sed 链条解析：
+          # 1. s/Corp\./Corporation/g : [新增] 统一公司缩写 (Borland Corp. -> Corporation)
+          # 2. s/.*Copyright/Copyright/I : 统一前缀，去除非核心词
+          # 3. 其它符号清洗保持不变
           
           grep -r -i -h -E "Copyright.*[0-9]{4}.*[a-zA-Z]" ./source_code \
+            | grep -v -E "http|//|html" \
+            | sed -E 's/Corp\./Corporation/g' \
+            | sed -E 's/.*Copyright/Copyright/I' \
             | sed -E 's/<[^>]*>//g' \
             | sed -E 's/[*#";\\]//g' \
+            | sed -E 's/[(){}]//g' \
             | sed -E 's/&amp;/&/g' \
             | sed -E 's/&#169;/(C)/g' \
             | sed -E 's/Copyright.*[:>]/Copyright /' \
-            | sed -E 's/[(][cC][)]//g' \
+            | sed -E 's/LegalCopyright//g' \
+            | sed -E 's/AssemblyCopyright//g' \
             | sed -E 's/ by / /g' \
             | sed -E 's/all rights reserved//Ig' \
             | sed -E 's/[,.]\s*$//' \
+            | sed -E 's/(n|0)$//' \
             | sed -E 's/\s+/ /g; s/^\s+|\s+$//g' \
             | sort -u -f > cleaned_notices.txt
           
@@ -56,25 +64,25 @@ jobs:
           echo "### 📊 最终统计结果" >> $GITHUB_STEP_SUMMARY
           echo "- **Distinct Copyright Occurrences**: $DISTINCT_COUNT" >> $GITHUB_STEP_SUMMARY
 
-      # Step 4: 生成文件 (逻辑必须与 Step 3 完全一致)
+      # Step 4: 生成文件 (逻辑同步)
       - name: Generate Legal Notices File
         run: |
           echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
           echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
           echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
-          echo "Tool used: GitHub Actions (Syft + grep/sed/sort deep clean)" >> LEGAL_NOTICES.txt
+          # 更新描述，体现你做了特定的语义统一
+          echo "Tool used: GitHub Actions (Syft + grep/sed/sort with 'Corp.' normalization)" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "" >> LEGAL_NOTICES.txt
           
           echo "DISTINCT COPYRIGHT NOTICES FOUND (NORMALIZED):" >> LEGAL_NOTICES.txt
-          # [核心修改] 这里直接使用 Step 3 生成的 cleaned_notices.txt
-          # 这样保证了文件里列出的列表，和上面统计的数字是严格对应的
+          # 直接使用 Step 3 生成的清洗后的列表，保证数据绝对一致
           cat cleaned_notices.txt >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "RAW SCAN DETAILS (Reference only):" >> LEGAL_NOTICES.txt
-          # 保留原始扫描作为参考，证明你没有遗漏，只是做了清洗
+          # 保留原始扫描供参考
           grep -r -i -E "Copyright.*[0-9]{4}" ./source_code >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
