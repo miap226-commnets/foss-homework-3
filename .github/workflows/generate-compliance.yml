@@ -12,14 +12,14 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 1. 下载作业指定的 Zlib 源码
+      # 1. 下载源码 (带 User-Agent 伪装)
       - name: Download zlib Source Code
         run: |
           wget --user-agent="Mozilla/5.0" https://www.zlib.net/zlib-1.3.1.tar.gz
           tar -xzvf zlib-1.3.1.tar.gz
           mv zlib-1.3.1 source_code
 
-      # 2. 生成 SBOM (SPDX 2.3 格式) - 对应作业要求
+      # 2. 生成 SBOM
       - name: Generate SBOM with Syft
         uses: anchore/sbom-action@v0
         with:
@@ -27,41 +27,55 @@ jobs:
           format: spdx-json
           output-file: zlib_sbom.spdx.json
 
-      # 3. 统计版权数量 - 对应 Google Form 问题
-      - name: Count Copyright Occurrences (Refined)
+      # 3. [核心修改] 统计“不重复”的版权声明 (Distinct Count)
+      - name: Count Distinct Copyright Notices
         id: count_copyrights
         run: |
-          echo "正在进行精确版权扫描..."
-          # 过滤掉不包含年份的引用行
-          COUNT=$(grep -r -i -E "Copyright.*[0-9]{4}" ./source_code | wc -l)
+          echo "开始统计 DISTINCT Copyright 数量..."
+          
+          # 逻辑解析：
+          # 1. grep -r -h: 递归扫描，-h 表示不输出文件名 (只看内容)
+          # 2. grep -o: 只输出匹配的部分 (去除行首的 * // # 等注释符干扰)
+          # 3. sort -u: 排序并去重 (Unique)
+          # 4. wc -l: 统计行数
+          
+          # 匹配规则："Copyright" 开头，后面包含年份的行 (忽略大小写)
+          DISTINCT_COUNT=$(grep -r -i -h -o -E "Copyright.*[0-9]{4}.*" ./source_code | sort -u | wc -l)
+          
           echo "============================================"
-          echo "REFINED_COUNT: $COUNT"
+          echo "DISTINCT_COUNT: $DISTINCT_COUNT"
           echo "============================================"
-          echo "### 📊 精确统计结果" >> $GITHUB_STEP_SUMMARY
-          echo "- **Refined Copyright Occurrences**: $COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # 写入 GitHub Summary 方便查看
+          echo "### 📊 统计结果 (Distinct Count)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Distinct Copyright Occurrences**: $DISTINCT_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "*(Counts unique text strings, ignoring file paths and duplicates)*" >> $GITHUB_STEP_SUMMARY
 
-      # 4. 生成 Legal Notices 文件 (升级版：去除干扰项)
+      # 4. 生成 Legal Notices 文件
       - name: Generate Legal Notices File
         run: |
           echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
           echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
           echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
-          # 更新工具描述，体现你使用了过滤器
-          echo "Tool used: GitHub Actions (Syft + grep with regex filter)" >> LEGAL_NOTICES.txt
+          echo "Tool used: GitHub Actions (Syft + grep/sort/uniq for distinct count)" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "" >> LEGAL_NOTICES.txt
           
-          echo "LICENSE TEXT & COPYRIGHTS:" >> LEGAL_NOTICES.txt
+          echo "DISTINCT COPYRIGHT NOTICES FOUND:" >> LEGAL_NOTICES.txt
+          # 在文件中列出去重后的版权列表，方便老师核对你的数字
+          grep -r -i -h -o -E "Copyright.*[0-9]{4}.*" ./source_code | sort -u >> LEGAL_NOTICES.txt
           
-          # [关键修改] 使用 -E 参数配合正则：
-          # 只提取包含 "Copyright" 且同行包含 4 位数字(年份) 的行
+          echo "" >> LEGAL_NOTICES.txt
+          echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
+          echo "RAW SCAN DETAILS (Reference):" >> LEGAL_NOTICES.txt
+          echo "Below is the raw list with file paths for reference:" >> LEGAL_NOTICES.txt
+          # 依然保留原始文件路径列表，作为完整性参考
           grep -r -i -E "Copyright.*[0-9]{4}" ./source_code >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
           echo "--- Full License Context from README ---" >> LEGAL_NOTICES.txt
           cat ./source_code/README >> LEGAL_NOTICES.txt
 
-      # 5. 打包文件供下载
       - name: Upload Homework Files
         uses: actions/upload-artifact@v4
         with:
