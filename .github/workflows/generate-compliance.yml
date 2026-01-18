@@ -12,14 +12,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 1. 下载源码 (带 User-Agent 伪装)
       - name: Download zlib Source Code
         run: |
           wget --user-agent="Mozilla/5.0" https://www.zlib.net/zlib-1.3.1.tar.gz
           tar -xzvf zlib-1.3.1.tar.gz
           mv zlib-1.3.1 source_code
 
-      # 2. 生成 SBOM
       - name: Generate SBOM with Syft
         uses: anchore/sbom-action@v0
         with:
@@ -27,57 +25,56 @@ jobs:
           format: spdx-json
           output-file: zlib_sbom.spdx.json
 
-      # 3. [终极优化] 统计“不重复”的版权声明 (Deep Clean & Distinct Count)
+      # Step 3: 统计数量 (清洗版)
       - name: Count Distinct Copyright Notices
         id: count_copyrights
         run: |
-          echo "开始统计并清洗 DISTINCT Copyright 数量..."
+          echo "开始进行强力清洗和去重统计..."
           
-          # 逻辑解析：
-          # 1. grep ...: 提取原始行
-          # 2. sed -E: 进行深度清洗
-          #    - s/&amp;/&/g: 修复 HTML 转义符
-          #    - s/&#169;/(C)/g: 修复 HTML 版权符
-          #    - s/&/and/g: 统一 & 为 and
-          #    - s/ by / /g: 去掉 "by"
-          #    - s/[";\\]|\\n|\\0|<[^>]*>//g: 去掉代码符号 (", ;, \, \n, \0, XML标签)
-          #    - s/\s+/ /g: 把多个空格变成一个空格
-          #    - s/^\s+|\s+$//g: 去掉首尾空格
-          # 3. sort -u: 排序去重
+          # 1. grep: 强制要求年份后必须有字母 (过滤掉 'Copyright (c) 1997' 这种无效声明)
+          # 2. sed 链: 统一格式，去掉 (c), all rights reserved, 标点符号等
           
-          grep -r -i -h -o -E "Copyright.*[0-9]{4}.*" ./source_code \
-            | sed -E 's/&amp;/\&/g; s/&#169;/(C)/g; s/&/and/g; s/ by / /g' \
-            | sed -E 's/[";\\]|\\n|\\0|<[^>]*>//g' \
+          grep -r -i -h -E "Copyright.*[0-9]{4}.*[a-zA-Z]" ./source_code \
+            | sed -E 's/<[^>]*>//g' \
+            | sed -E 's/[*#";\\]//g' \
+            | sed -E 's/&amp;/&/g' \
+            | sed -E 's/&#169;/(C)/g' \
+            | sed -E 's/Copyright.*[:>]/Copyright /' \
+            | sed -E 's/[(][cC][)]//g' \
+            | sed -E 's/ by / /g' \
+            | sed -E 's/all rights reserved//Ig' \
+            | sed -E 's/[,.]\s*$//' \
             | sed -E 's/\s+/ /g; s/^\s+|\s+$//g' \
             | sort -u -f > cleaned_notices.txt
           
           DISTINCT_COUNT=$(wc -l < cleaned_notices.txt)
           
           echo "============================================"
-          echo "DISTINCT_COUNT: $DISTINCT_COUNT"
+          echo "FINAL DISTINCT COUNT: $DISTINCT_COUNT"
           echo "============================================"
           
-          echo "### 📊 最终去重统计结果" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 最终统计结果" >> $GITHUB_STEP_SUMMARY
           echo "- **Distinct Copyright Occurrences**: $DISTINCT_COUNT" >> $GITHUB_STEP_SUMMARY
-          echo "*(Deep cleaning applied: removed code syntax, standardized text)*" >> $GITHUB_STEP_SUMMARY
 
-      # 4. 生成 Legal Notices 文件 (同步使用清洗后的数据)
+      # Step 4: 生成文件 (逻辑必须与 Step 3 完全一致)
       - name: Generate Legal Notices File
         run: |
           echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
           echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
           echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
-          echo "Tool used: GitHub Actions (Syft + grep/sed/sort for deep deduplication)" >> LEGAL_NOTICES.txt
+          echo "Tool used: GitHub Actions (Syft + grep/sed/sort deep clean)" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "" >> LEGAL_NOTICES.txt
           
-          echo "DISTINCT COPYRIGHT NOTICES FOUND (CLEANED):" >> LEGAL_NOTICES.txt
-          # 使用上面生成的清洗过的文件
+          echo "DISTINCT COPYRIGHT NOTICES FOUND (NORMALIZED):" >> LEGAL_NOTICES.txt
+          # [核心修改] 这里直接使用 Step 3 生成的 cleaned_notices.txt
+          # 这样保证了文件里列出的列表，和上面统计的数字是严格对应的
           cat cleaned_notices.txt >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
-          echo "RAW SCAN DETAILS (Reference):" >> LEGAL_NOTICES.txt
+          echo "RAW SCAN DETAILS (Reference only):" >> LEGAL_NOTICES.txt
+          # 保留原始扫描作为参考，证明你没有遗漏，只是做了清洗
           grep -r -i -E "Copyright.*[0-9]{4}" ./source_code >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
