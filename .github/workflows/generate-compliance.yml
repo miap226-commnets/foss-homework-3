@@ -25,64 +25,108 @@ jobs:
           format: spdx-json
           output-file: zlib_sbom.spdx.json
 
-      # Step 3: 统计数量 (含 Corp. -> Corporation 修正)
+      # 3. [Python 引擎] 智能统计 (完美解决跨行、重复、格式清洗)
       - name: Count Distinct Copyright Notices
         id: count_copyrights
         run: |
-          echo "开始进行深度代码清洗..."
+          echo "启动 Python 扫描引擎..."
           
-          # sed 链条解析：
-          # 1. s/Corp\./Corporation/g : [新增] 统一公司缩写 (Borland Corp. -> Corporation)
-          # 2. s/.*Copyright/Copyright/I : 统一前缀，去除非核心词
-          # 3. 其它符号清洗保持不变
+          # 将 Python 脚本写入临时文件 scan.py
+          cat << 'EOF' > scan.py
+          import os
+          import re
+
+          root_dir = './source_code'
+          notices = set()
+
+          # 正则解释：
+          # 1. Copyright : 锚点
+          # 2. [^0-9a-zA-Z]*? : 非贪婪匹配中间的杂质 (换行、*、注释符、空格、(c)等)
+          # 3. ((?:19|20)\d{2}.*?) : 捕获组，匹配 19xx 或 20xx 开头的年份及其后的作者
+          # 4. (?:\r|\n|$) : 匹配到行尾
+          # re.DOTALL : 让点号(.)可以匹配换行符 (关键！解决跨行问题)
           
-          grep -r -i -h -E "Copyright.*[0-9]{4}.*[a-zA-Z]" ./source_code \
-            | grep -v -E "http|//|html" \
-            | sed -E 's/Corp\./Corporation/g' \
-            | sed -E 's/.*Copyright/Copyright/I' \
-            | sed -E 's/<[^>]*>//g' \
-            | sed -E 's/[*#";\\]//g' \
-            | sed -E 's/[(){}]//g' \
-            | sed -E 's/&amp;/&/g' \
-            | sed -E 's/&#169;/(C)/g' \
-            | sed -E 's/Copyright.*[:>]/Copyright /' \
-            | sed -E 's/LegalCopyright//g' \
-            | sed -E 's/AssemblyCopyright//g' \
-            | sed -E 's/ by / /g' \
-            | sed -E 's/all rights reserved//Ig' \
-            | sed -E 's/[,.]\s*$//' \
-            | sed -E 's/(n|0)$//' \
-            | sed -E 's/\s+/ /g; s/^\s+|\s+$//g' \
-            | sort -u -f > cleaned_notices.txt
+          regex = re.compile(r'Copyright[^0-9a-zA-Z]*?((?:19|20)\d{2}.*?)(?:\r|\n|$)', re.IGNORECASE | re.DOTALL)
+
+          for subdir, dirs, files in os.walk(root_dir):
+              for file in files:
+                  filepath = os.path.join(subdir, file)
+                  try:
+                      with open(filepath, 'r', errors='ignore') as f:
+                          content = f.read()
+                          
+                          # 扫描所有匹配项
+                          for match in regex.finditer(content):
+                              # 提取出的核心内容 (年份 + 作者)
+                              raw_body = match.group(1)
+                              
+                              # 重新拼接标准头
+                              full_text = "Copyright " + raw_body
+                              
+                              # === 强力清洗逻辑 (移植自之前的 sed) ===
+                              # 1. 去掉 HTML 标签、代码符号
+                              clean = re.sub(r'<[^>]*>', '', full_text)
+                              clean = re.sub(r'[*#";\\]', '', clean)
+                              # 2. 修复 HTML 转义
+                              clean = re.sub(r'&amp;', '&', clean)
+                              clean = re.sub(r'&#169;', '(C)', clean)
+                              # 3. 统一 (C) 和 By
+                              clean = re.sub(r'\(c\)', '', clean, flags=re.IGNORECASE)
+                              clean = re.sub(r'\s+by\s+', ' ', clean, flags=re.IGNORECASE)
+                              # 4. 统一公司拼写 (Borland Corp -> Corporation)
+                              clean = re.sub(r'Corp\.', 'Corporation', clean, flags=re.IGNORECASE)
+                              # 5. 去掉 "All rights reserved"
+                              clean = re.sub(r'all rights reserved', '', clean, flags=re.IGNORECASE)
+                              # 6. 去掉行尾标点和前后空格
+                              clean = re.sub(r'[,.]\s*$', '', clean)
+                              clean = re.sub(r'\s+', ' ', clean).strip()
+                              
+                              # 过滤逻辑：
+                              # 1. 必须包含至少一个字母 (过滤 'Copyright 1997')
+                              # 2. 不能包含 URL (过滤 'Copyright ... .html')
+                              if re.search(r'[a-zA-Z]', clean) and not re.search(r'http|//|html', clean, re.IGNORECASE):
+                                  notices.add(clean)
+                                  
+                  except Exception:
+                      pass
+
+          # 输出结果到文件
+          with open('cleaned_notices.txt', 'w') as f:
+              for n in sorted(notices):
+                  f.write(n + '\n')
+          EOF
           
+          # 运行 Python 脚本
+          python3 scan.py
+          
+          # 统计行数
           DISTINCT_COUNT=$(wc -l < cleaned_notices.txt)
           
           echo "============================================"
           echo "FINAL DISTINCT COUNT: $DISTINCT_COUNT"
           echo "============================================"
           
-          echo "### 📊 最终统计结果" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 最终统计结果 (Python Powered)" >> $GITHUB_STEP_SUMMARY
           echo "- **Distinct Copyright Occurrences**: $DISTINCT_COUNT" >> $GITHUB_STEP_SUMMARY
 
-      # Step 4: 生成文件 (逻辑同步)
+      # 4. 生成文件
       - name: Generate Legal Notices File
         run: |
           echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
           echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
           echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
-          # 更新描述，体现你做了特定的语义统一
-          echo "Tool used: GitHub Actions (Syft + grep/sed/sort with 'Corp.' normalization)" >> LEGAL_NOTICES.txt
+          echo "Tool used: GitHub Actions (Custom Python Script for multiline regex & normalization)" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "" >> LEGAL_NOTICES.txt
           
           echo "DISTINCT COPYRIGHT NOTICES FOUND (NORMALIZED):" >> LEGAL_NOTICES.txt
-          # 直接使用 Step 3 生成的清洗后的列表，保证数据绝对一致
+          # 直接读取 Python 生成的完美文件
           cat cleaned_notices.txt >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "RAW SCAN DETAILS (Reference only):" >> LEGAL_NOTICES.txt
-          # 保留原始扫描供参考
+          # 简单 grep 作为参考
           grep -r -i -E "Copyright.*[0-9]{4}" ./source_code >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
