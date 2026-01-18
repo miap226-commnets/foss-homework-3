@@ -27,49 +27,57 @@ jobs:
           format: spdx-json
           output-file: zlib_sbom.spdx.json
 
-      # 3. [核心修改] 统计“不重复”的版权声明 (Distinct Count)
+      # 3. [终极优化] 统计“不重复”的版权声明 (Deep Clean & Distinct Count)
       - name: Count Distinct Copyright Notices
         id: count_copyrights
         run: |
-          echo "开始统计 DISTINCT Copyright 数量..."
+          echo "开始统计并清洗 DISTINCT Copyright 数量..."
           
           # 逻辑解析：
-          # 1. grep -r -h: 递归扫描，-h 表示不输出文件名 (只看内容)
-          # 2. grep -o: 只输出匹配的部分 (去除行首的 * // # 等注释符干扰)
-          # 3. sort -u: 排序并去重 (Unique)
-          # 4. wc -l: 统计行数
+          # 1. grep ...: 提取原始行
+          # 2. sed -E: 进行深度清洗
+          #    - s/&amp;/&/g: 修复 HTML 转义符
+          #    - s/&#169;/(C)/g: 修复 HTML 版权符
+          #    - s/&/and/g: 统一 & 为 and
+          #    - s/ by / /g: 去掉 "by"
+          #    - s/[";\\]|\\n|\\0|<[^>]*>//g: 去掉代码符号 (", ;, \, \n, \0, XML标签)
+          #    - s/\s+/ /g: 把多个空格变成一个空格
+          #    - s/^\s+|\s+$//g: 去掉首尾空格
+          # 3. sort -u: 排序去重
           
-          # 匹配规则："Copyright" 开头，后面包含年份的行 (忽略大小写)
-          DISTINCT_COUNT=$(grep -r -i -h -o -E "Copyright.*[0-9]{4}.*" ./source_code | sort -u | wc -l)
+          grep -r -i -h -o -E "Copyright.*[0-9]{4}.*" ./source_code \
+            | sed -E 's/&amp;/\&/g; s/&#169;/(C)/g; s/&/and/g; s/ by / /g' \
+            | sed -E 's/[";\\]|\\n|\\0|<[^>]*>//g' \
+            | sed -E 's/\s+/ /g; s/^\s+|\s+$//g' \
+            | sort -u -f > cleaned_notices.txt
+          
+          DISTINCT_COUNT=$(wc -l < cleaned_notices.txt)
           
           echo "============================================"
           echo "DISTINCT_COUNT: $DISTINCT_COUNT"
           echo "============================================"
           
-          # 写入 GitHub Summary 方便查看
-          echo "### 📊 统计结果 (Distinct Count)" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 最终去重统计结果" >> $GITHUB_STEP_SUMMARY
           echo "- **Distinct Copyright Occurrences**: $DISTINCT_COUNT" >> $GITHUB_STEP_SUMMARY
-          echo "*(Counts unique text strings, ignoring file paths and duplicates)*" >> $GITHUB_STEP_SUMMARY
+          echo "*(Deep cleaning applied: removed code syntax, standardized text)*" >> $GITHUB_STEP_SUMMARY
 
-      # 4. 生成 Legal Notices 文件
+      # 4. 生成 Legal Notices 文件 (同步使用清洗后的数据)
       - name: Generate Legal Notices File
         run: |
           echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
           echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
           echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
-          echo "Tool used: GitHub Actions (Syft + grep/sort/uniq for distinct count)" >> LEGAL_NOTICES.txt
+          echo "Tool used: GitHub Actions (Syft + grep/sed/sort for deep deduplication)" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "" >> LEGAL_NOTICES.txt
           
-          echo "DISTINCT COPYRIGHT NOTICES FOUND:" >> LEGAL_NOTICES.txt
-          # 在文件中列出去重后的版权列表，方便老师核对你的数字
-          grep -r -i -h -o -E "Copyright.*[0-9]{4}.*" ./source_code | sort -u >> LEGAL_NOTICES.txt
+          echo "DISTINCT COPYRIGHT NOTICES FOUND (CLEANED):" >> LEGAL_NOTICES.txt
+          # 使用上面生成的清洗过的文件
+          cat cleaned_notices.txt >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "RAW SCAN DETAILS (Reference):" >> LEGAL_NOTICES.txt
-          echo "Below is the raw list with file paths for reference:" >> LEGAL_NOTICES.txt
-          # 依然保留原始文件路径列表，作为完整性参考
           grep -r -i -E "Copyright.*[0-9]{4}" ./source_code >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
