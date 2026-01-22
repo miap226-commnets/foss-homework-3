@@ -25,11 +25,11 @@ jobs:
           format: spdx-json
           output-file: zlib_sbom.spdx.json
 
-      # Step 3: [重制版] 智能去重统计 (针对 README 优化)
+# Step 3: [修改版] 抓取所有 Copyright 行 (含无年份)
       - name: Count Distinct Copyright Notices
         id: count_copyrights
         run: |
-          echo "启动 Python 智能扫描引擎 (README 优化版)..."
+          echo "启动 Python 智能扫描引擎 (全量抓取版)..."
           
           cat << 'EOF' > scan.py
           import os
@@ -38,111 +38,67 @@ jobs:
           root_dir = './source_code'
           notices = set()
           
-          # 正则设计思路：
-          # 1. 锚点: "Copyright" (忽略大小写)
-          # 2. 间隔: [^0-9]*? -> 允许中间出现 (c), (C), by, 空格, 甚至代码符号，直到遇到数字
-          # 3. 核心: ((?:19|20)\d{2}.*?) -> 抓取 19xx 或 20xx 开头的年份，以及后面所有内容
-          # 4. 边界: (?:\r|\n|$) -> 匹配到行尾
-          regex = re.compile(r'Copyright[^0-9]*?((?:19|20)\d{2}.*?)(?:\r|\n|$)', re.IGNORECASE)
+          # 修改点 1: 正则不再强制匹配年份，而是匹配整行
+          regex = re.compile(r'(Copyright.*)(?:\r|\n|$)', re.IGNORECASE)
 
           for subdir, dirs, files in os.walk(root_dir):
               for file in files:
                   filepath = os.path.join(subdir, file)
                   try:
-                      # 忽略二进制文件和非文本文件
                       with open(filepath, 'r', errors='ignore') as f:
                           content = f.read()
                           
                           for match in regex.finditer(content):
-                              # 这里抓到的是 "年份 + 作者" (例如 "1995-2024 Jean-loup Gailly")
-                              raw_body = match.group(1)
+                              # 修改点 2: 直接获取整行内容
+                              clean = match.group(1).strip()
                               
-                              # 拼接成标准头，方便统一处理
-                              full_text = "Copyright " + raw_body
+                              # 清洗逻辑 (保持不变，用于去重)
+                              clean = re.sub(r'<[\w\.-]+@[\w\.-]+>', '', clean) # 去邮箱
+                              clean = re.sub(r'\(?\s*https?://\S+\s*\)?', '', clean, flags=re.IGNORECASE) # 去链接
+                              clean = re.sub(r'["\';\\]', '', clean) # 去代码符号
+                              clean = re.sub(r'/\*|\*/|//', '', clean) # 去注释符
+                              clean = re.sub(r'<[^>]*>', '', clean) # 去标签
                               
-                              # === 强力归一化 (Normalization) ===
-                              # 只有把不同格式洗成一样的，才能实现 "Redundant counted as one"
-                              
-                              # 1. 移除 URL 和 邮箱 (通常是噪音，导致本该重复的行变得不同)
-                              # 移除 <email@address>
-                              clean = re.sub(r'<[\w\.-]+@[\w\.-]+>', '', full_text)
-                              # 移除 (http://...) 或 http://...
-                              clean = re.sub(r'\(?\s*https?://\S+\s*\)?', '', clean, flags=re.IGNORECASE)
-                              clean = re.sub(r'\(?\s*www\.\S+\s*\)?', '', clean, flags=re.IGNORECASE)
-                              
-                              # 2. 移除代码噪音 (针对 .c .h .rc 文件)
-                              clean = re.sub(r'["\';\\]', '', clean)  # 去掉引号、分号
-                              clean = re.sub(r'/\*|\*/|//', '', clean) # 去掉注释符
-                              clean = re.sub(r'<[^>]*>', '', clean)    # 去掉 XML/HTML 标签
-                              
-                              # 3. 移除常见修饰词，统一格式
-                              clean = re.sub(r'\(c\)', '', clean, flags=re.IGNORECASE) # 去掉 (c)
-                              clean = re.sub(r'\s+by\s+', ' ', clean, flags=re.IGNORECASE) # 去掉 by
-                              clean = re.sub(r'All rights reserved', '', clean, flags=re.IGNORECASE)
-                              
-                              # 4. 关键：统一公司名称拼写
-                              # 这样 "Borland Corp." 和 "Borland Corporation" 就会算作同一个
+                              # 统一公司名
                               clean = re.sub(r'Corp\.', 'Corporation', clean, flags=re.IGNORECASE)
                               
-                              # 5. 去掉首尾标点 (句号, 逗号) 和多余空格
-                              # 这样 "Mark Adler." 和 "Mark Adler" 就会算作同一个
+                              # 去掉末尾标点
                               clean = re.sub(r'[,.-]\s*$', '', clean)
                               clean = re.sub(r'\s+', ' ', clean).strip()
                               
-                              # 6. 最终过滤：
-                              # - 长度限制 (防止抓到长篇大论)
-                              # - 必须包含字母 (防止只抓到 "Copyright 1995")
-                              if len(clean) < 150 and re.search(r'[a-zA-Z]', clean):
+                              # 过滤过短的噪音 (例如只写了 "Copyright")
+                              if len(clean) > 10 and re.search(r'[a-zA-Z]', clean):
                                   notices.add(clean)
                                   
                   except Exception:
                       pass
 
-          # 排序并输出
           with open('cleaned_notices.txt', 'w') as f:
               for n in sorted(notices):
                   f.write(n + '\n')
           EOF
           
-          # 运行脚本
           python3 scan.py
-          
-          # 统计行数
-          DISTINCT_COUNT=$(wc -l < cleaned_notices.txt)
-          
-          echo "============================================"
-          echo "FINAL DISTINCT COUNT: $DISTINCT_COUNT"
-          echo "============================================"
-          
-          echo "### 📊 最终统计结果" >> $GITHUB_STEP_SUMMARY
-          echo "- **Distinct Copyright Occurrences**: $DISTINCT_COUNT" >> $GITHUB_STEP_SUMMARY
 
-      # Step 4: 生成文件
+      # Step 4: 生成文件 (包含宽松的 RAW 扫描)
       - name: Generate Legal Notices File
         run: |
           echo "FOSS Homework 3 - Legal Notices" > LEGAL_NOTICES.txt
           echo "Student Matrikelnummer: (Fill in your ID)" >> LEGAL_NOTICES.txt
           echo "Project: zlib 1.3.1" >> LEGAL_NOTICES.txt
-          echo "Tool used: GitHub Actions (Python Normalization for Distinct Count)" >> LEGAL_NOTICES.txt
+          echo "Tool used: GitHub Actions (Python Script)" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
-          echo "" >> LEGAL_NOTICES.txt
           
           echo "DISTINCT COPYRIGHT NOTICES FOUND (NORMALIZED):" >> LEGAL_NOTICES.txt
           echo "(Redundant occurrences are counted as one)" >> LEGAL_NOTICES.txt
           echo "" >> LEGAL_NOTICES.txt
-          # 写入清洗后的去重列表
           cat cleaned_notices.txt >> LEGAL_NOTICES.txt
           
           echo "" >> LEGAL_NOTICES.txt
           echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
-          echo "IMPORTANT: REFERENCE FROM README FILE:" >> LEGAL_NOTICES.txt
-          # 专门把 README 里的版权部分提取出来展示，响应题目要求
-          grep -A 20 "Copyright notice:" ./source_code/README >> LEGAL_NOTICES.txt
-          
-          echo "" >> LEGAL_NOTICES.txt
-          echo "---------------------------------------------------" >> LEGAL_NOTICES.txt
           echo "RAW SCAN DETAILS (Reference only):" >> LEGAL_NOTICES.txt
-          grep -r -i -E "Copyright.*[0-9]{4}" ./source_code >> LEGAL_NOTICES.txt
+          # 修改点 3: grep 命令不再限制年份 [0-9]{4}
+          grep -r -i "Copyright" ./source_code >> LEGAL_NOTICES.txt
 
       - name: Upload Homework Files
         uses: actions/upload-artifact@v4
